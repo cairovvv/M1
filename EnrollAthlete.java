@@ -3,162 +3,340 @@ package com.mycompany.sportstrainingacademy;
 import java.sql.*;
 
 /**
- * Handles session creation and athlete enrollment operations.
- * Connects to the SQLite database to manage tbl_Sessions and tbl_Enrollments.
+ * EnrollAthlete — Manages training sessions and athlete enrollments.
+ *
+ * New features:
+ *   · displayAvailableSessions() shows date, time, sport, and fee per session.
+ *   · getSessionFee() lets the main class show the fee BEFORE asking for payment.
+ *   · processEnrollment() writes to tbl_Payments and prints a full
+ *     schedule + payment receipt after successful enrollment.
+ *   · initTables() auto-creates all required tables on first run.
  */
 public class EnrollAthlete {
 
-    // ==================== CONSTANTS ===================
-    private static final String DB_URL = "jdbc:sqlite:C:/Users/josek/OneDrive/Documents/NetBeansProjects/SportsTrainingAcademy/Athletes.db";
+    private static final String DB_URL = "jdbc:sqlite:C:/Users/james paul/Documents/Athletes.db";
+    public static final  String ENROLL_SUCCESS = "Athlete enrolled in session successfully.";
 
-    // Enrollment result messages
-    public static final String ENROLL_SUCCESS    = "Athlete enrolled in session successfully.";
-    public static final String ENROLL_NO_ATHLETE = "Athlete not found.";
-    public static final String ENROLL_NO_SESSION = "Session not found.";
-    public static final String ENROLL_NOT_SCHED  = "Session is already completed or cancelled.";
-    public static final String ENROLL_FULL       = "Session is already at full capacity.";
-    public static final String ENROLL_FAILED     = "Enrollment failed. Please try again.";
-    public static final String ENROLL_DB_ERROR   = "Database error. Please contact support.";
-
-    // ================= DATABASE HELPER ================
     private Connection getConnection() throws SQLException {
         return DriverManager.getConnection(DB_URL);
     }
 
-    // ================== CREATE SESSION ================
+    // ─────────────────────────────────────────────
+    // Table Initialization
+    // ─────────────────────────────────────────────
+
     /**
-     * Creates a new training session in the database.
-     *
-     * @param name    Name of the session.
-     * @param status  Status of the session (e.g., "Scheduled").
-     * @param maxCap  Maximum number of athletes allowed.
-     * @return true if the session was created successfully.
+     * Creates all required tables if they do not yet exist.
+     * Called once from SportsTrainingAcademy.main() on startup.
      */
-    public boolean createSession(String name, String status, int maxCap) {
-        String sql = "INSERT INTO tbl_Sessions (SessionName, Status, MaxCapacity, CurrentEnrollment) "
-                   + "VALUES (?, ?, ?, 0)";
+    public void initTables() {
+        String[] ddl = {
+            // Users
+            "CREATE TABLE IF NOT EXISTS tbl_Users ("
+            + "  Username TEXT PRIMARY KEY,"
+            + "  Password TEXT NOT NULL,"
+            + "  Roles    TEXT NOT NULL DEFAULT 'Athlete'"
+            + ")",
+            // Athlete profiles
+            "CREATE TABLE IF NOT EXISTS tbl_Information ("
+            + "  AtheleteID INTEGER PRIMARY KEY AUTOINCREMENT,"
+            + "  FirstName  TEXT NOT NULL,"
+            + "  LastName   TEXT NOT NULL,"
+            + "  Age        INTEGER,"
+            + "  Sport      TEXT,"
+            + "  BMI        REAL,"
+            + "  Username   TEXT"
+            + ")",
+            // Sessions — now includes Sport, Date, Time, Fee
+            "CREATE TABLE IF NOT EXISTS tbl_Sessions ("
+            + "  SessionID         INTEGER PRIMARY KEY AUTOINCREMENT,"
+            + "  SessionName       TEXT    NOT NULL,"
+            + "  Sport             TEXT    NOT NULL DEFAULT 'General',"
+            + "  SessionDate       TEXT    NOT NULL DEFAULT 'TBD',"
+            + "  SessionTime       TEXT    NOT NULL DEFAULT 'TBD',"
+            + "  Fee               REAL    NOT NULL DEFAULT 0.0,"
+            + "  Status            TEXT    NOT NULL DEFAULT 'Scheduled',"
+            + "  MaxCapacity       INTEGER NOT NULL,"
+            + "  CurrentEnrollment INTEGER NOT NULL DEFAULT 0"
+            + ")",
+            // Enrollment records
+            "CREATE TABLE IF NOT EXISTS tbl_Enrollments ("
+            + "  EnrollmentID INTEGER PRIMARY KEY AUTOINCREMENT,"
+            + "  AtheleteID   INTEGER NOT NULL,"
+            + "  SessionID    INTEGER NOT NULL,"
+            + "  EnrolledAt   TEXT    DEFAULT (datetime('now','localtime'))"
+            + ")",
+            // Payment records — NEW
+            "CREATE TABLE IF NOT EXISTS tbl_Payments ("
+            + "  PaymentID     INTEGER PRIMARY KEY AUTOINCREMENT,"
+            + "  AtheleteID    INTEGER NOT NULL,"
+            + "  SessionID     INTEGER NOT NULL,"
+            + "  TransactionID TEXT    NOT NULL,"
+            + "  AmountPaid    REAL    NOT NULL,"
+            + "  PaymentMethod TEXT    NOT NULL,"
+            + "  PaymentStatus TEXT    NOT NULL DEFAULT 'Paid',"
+            + "  PaidAt        TEXT    DEFAULT (datetime('now','localtime'))"
+            + ")",
+            // Teams
+            "CREATE TABLE IF NOT EXISTS tbl_Teams ("
+            + "  TeamID      INTEGER PRIMARY KEY AUTOINCREMENT,"
+            + "  TeamName    TEXT NOT NULL,"
+            + "  CaptainID   INTEGER,"
+            + "  Sport       TEXT,"
+            + "  MaxTeamSize INTEGER"
+            + ")"
+        };
+
+        try (Connection conn = getConnection(); Statement st = conn.createStatement()) {
+            for (String sql : ddl) st.execute(sql);
+        } catch (SQLException e) {
+            System.out.println("  [!] Table initialization error: " + e.getMessage());
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // Session Display
+    // ─────────────────────────────────────────────
+
+    /**
+     * Displays all available sessions with full schedule and fee details.
+     */
+    public void displayAvailableSessions() {
+        String sql = "SELECT * FROM tbl_Sessions "
+                   + "WHERE Status = 'Scheduled' AND CurrentEnrollment < MaxCapacity "
+                   + "ORDER BY SessionDate, SessionTime";
 
         try (Connection conn = getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+             Statement  st   = conn.createStatement();
+             ResultSet  rs   = st.executeQuery(sql)) {
 
-            pstmt.setString(1, name);
-            pstmt.setString(2, status);
-            pstmt.setInt(3, maxCap);
+            System.out.println("\n  ============================================");
+            System.out.println("           AVAILABLE SESSIONS               ");
+            System.out.println("  ============================================");
 
-            return pstmt.executeUpdate() > 0;
+            boolean found = false;
+            while (rs.next()) {
+                found = true;
+                System.out.println("  --------------------------------------------");
+                System.out.printf ("  Session ID   : %d%n",    rs.getInt("SessionID"));
+                System.out.printf ("  Session Name : %s%n",    rs.getString("SessionName"));
+                System.out.printf ("  Sport        : %s%n",    rs.getString("Sport"));
+                System.out.printf ("  Date         : %s%n",    rs.getString("SessionDate"));
+                System.out.printf ("  Time         : %s%n",    rs.getString("SessionTime"));
+                System.out.printf ("  Fee          : P%.2f%n", rs.getDouble("Fee"));
+                System.out.printf ("  Slots Left   : %d / %d%n",
+                        rs.getInt("MaxCapacity") - rs.getInt("CurrentEnrollment"),
+                        rs.getInt("MaxCapacity"));
+            }
+            System.out.println("  ============================================");
+            if (!found) System.out.println("  No sessions available at this time.");
 
         } catch (SQLException e) {
-            System.err.println("[CreateSession Error] " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // Fee & Session Lookup
+    // ─────────────────────────────────────────────
+
+    /**
+     * Returns the fee for a given session ID.
+     * Returns -1 if the session is not found.
+     * Used by the main class to display the fee BEFORE prompting for payment.
+     */
+    public double getSessionFee(int sId) {
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT Fee FROM tbl_Sessions WHERE SessionID = ?")) {
+            ps.setInt(1, sId);
+            ResultSet rs = ps.executeQuery();
+            return rs.next() ? rs.getDouble("Fee") : -1;
+        } catch (SQLException e) {
+            return -1;
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // Post-Payment: Schedule + Receipt Display
+    // ─────────────────────────────────────────────
+
+    private void printSessionSchedule(int sId) {
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT * FROM tbl_Sessions WHERE SessionID = ?")) {
+            ps.setInt(1, sId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                System.out.println("\n  ============================================");
+                System.out.println("           YOUR SESSION SCHEDULE            ");
+                System.out.println("  ============================================");
+                System.out.printf ("  Session Name : %s%n", rs.getString("SessionName"));
+                System.out.printf ("  Sport        : %s%n", rs.getString("Sport"));
+                System.out.printf ("  Date         : %s%n", rs.getString("SessionDate"));
+                System.out.printf ("  Time         : %s%n", rs.getString("SessionTime"));
+                System.out.printf ("  Status       : %s%n", rs.getString("Status"));
+                System.out.println("  ============================================");
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void printPaymentReceipt(int aId, int sId) {
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT * FROM tbl_Payments WHERE AtheleteID = ? AND SessionID = ? "
+                   + "ORDER BY PaidAt DESC LIMIT 1")) {
+            ps.setInt(1, aId);
+            ps.setInt(2, sId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                System.out.println("\n  ============================================");
+                System.out.println("              PAYMENT RECEIPT               ");
+                System.out.println("  ============================================");
+                System.out.printf ("  Transaction ID : %s%n",   rs.getString("TransactionID"));
+                System.out.printf ("  Athlete ID     : %d%n",   rs.getInt("AtheleteID"));
+                System.out.printf ("  Payment Method : %s%n",   rs.getString("PaymentMethod"));
+                System.out.printf ("  Amount Paid    : P%.2f%n",rs.getDouble("AmountPaid"));
+                System.out.printf ("  Payment Status : %s%n",   rs.getString("PaymentStatus"));
+                System.out.printf ("  Paid At        : %s%n",   rs.getString("PaidAt"));
+                System.out.println("  ============================================");
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // Enrollment — with Payment Integration
+    // ─────────────────────────────────────────────
+
+    /**
+     * Processes enrollment with payment.
+     *
+     * Flow:
+     *   1. Validate session (exists + has open slots).
+     *   2. Run PaymentFramework.processInvoice() — aborts if validation fails.
+     *   3. Write records to tbl_Enrollments and tbl_Payments.
+     *   4. Print session schedule + payment receipt.
+     */
+    public String processEnrollment(int aId, int sId, PaymentFramework payment) {
+        String checkSession  = "SELECT Status, MaxCapacity, CurrentEnrollment "
+                             + "FROM tbl_Sessions WHERE SessionID = ?";
+        String insertEnroll  = "INSERT INTO tbl_Enrollments (AtheleteID, SessionID, EnrolledAt) VALUES (?, ?, datetime('now','localtime'))";
+        String updateSession = "UPDATE tbl_Sessions SET CurrentEnrollment = CurrentEnrollment + 1 "
+                             + "WHERE SessionID = ?";
+        String insertPayment = "INSERT INTO tbl_Payments "
+                             + "(AtheleteID, SessionID, TransactionID, AmountPaid, PaymentMethod, PaymentStatus, PaidAt) "
+                             + "VALUES (?, ?, ?, ?, ?, 'Paid', datetime('now','localtime'))";
+
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+
+            // ── 1. Validate session ───────────────────
+            try (PreparedStatement ps = conn.prepareStatement(checkSession)) {
+                ps.setInt(1, sId);
+                ResultSet rs = ps.executeQuery();
+                if (!rs.next())                                                  return "Session not found.";
+                if (rs.getInt("CurrentEnrollment") >= rs.getInt("MaxCapacity")) return "Session is full.";
+            }
+
+            // ── 2. Process payment ────────────────────
+            payment.processInvoice();
+            if (payment.getFinalAmount() <= 0) {
+                conn.rollback();
+                return "Payment failed. Enrollment cancelled.";
+            }
+
+            // ── 3. Write records ──────────────────────
+            try (PreparedStatement ps1 = conn.prepareStatement(insertEnroll);
+                 PreparedStatement ps2 = conn.prepareStatement(updateSession);
+                 PreparedStatement ps3 = conn.prepareStatement(insertPayment)) {
+
+                ps1.setInt(1, aId);    ps1.setInt(2, sId);     ps1.executeUpdate();
+                ps2.setInt(1, sId);                            ps2.executeUpdate();
+                ps3.setInt(1, aId);    ps3.setInt(2, sId);
+                ps3.setString(3, payment.getTransactionID());
+                ps3.setDouble(4, payment.getFinalAmount());
+                ps3.setString(5, payment.paymentMethod);
+                ps3.executeUpdate();
+
+                conn.commit();
+
+            } catch (SQLException e) {
+                conn.rollback();
+                return "Enrollment failed. Transaction rolled back.";
+            }
+
+            // ── 4. Show schedule + receipt ────────────
+            printSessionSchedule(sId);
+            printPaymentReceipt(aId, sId);
+
+            return ENROLL_SUCCESS;
+
+        } catch (SQLException e) {
+            return "Database error: " + e.getMessage();
+        }
+    }
+
+    /** Admin overload — enrolls without payment (no fee required). */
+    public String processEnrollment(int aId, int sId) {
+        String checkSession  = "SELECT Status, MaxCapacity, CurrentEnrollment "
+                             + "FROM tbl_Sessions WHERE SessionID = ?";
+        String insertEnroll  = "INSERT INTO tbl_Enrollments (AtheleteID, SessionID) VALUES (?, ?)";
+        String updateSession = "UPDATE tbl_Sessions SET CurrentEnrollment = CurrentEnrollment + 1 "
+                             + "WHERE SessionID = ?";
+
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            try (PreparedStatement ps = conn.prepareStatement(checkSession)) {
+                ps.setInt(1, sId);
+                ResultSet rs = ps.executeQuery();
+                if (!rs.next())                                                  return "Session not found.";
+                if (rs.getInt("CurrentEnrollment") >= rs.getInt("MaxCapacity")) return "Session is full.";
+            }
+            try (PreparedStatement ps1 = conn.prepareStatement(insertEnroll);
+                 PreparedStatement ps2 = conn.prepareStatement(updateSession)) {
+                ps1.setInt(1, aId); ps1.setInt(2, sId); ps1.executeUpdate();
+                ps2.setInt(1, sId);                     ps2.executeUpdate();
+                conn.commit();
+                return ENROLL_SUCCESS;
+            } catch (SQLException e) {
+                conn.rollback();
+                return "Enrollment failed.";
+            }
+        } catch (SQLException e) {
+            return "Database error.";
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // Session Creation (Admin)
+    // ─────────────────────────────────────────────
+
+    /**
+     * Full session creation — used by the updated admin tools.
+     */
+    public boolean createSession(String name, String sport, String date, String time,
+                                  double fee, String status, int maxCap) {
+        String sql = "INSERT INTO tbl_Sessions "
+                   + "(SessionName, Sport, SessionDate, SessionTime, Fee, Status, MaxCapacity, CurrentEnrollment) "
+                   + "VALUES (?, ?, ?, ?, ?, ?, ?, 0)";
+        try (Connection conn = getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, name);   pstmt.setString(2, sport);
+            pstmt.setString(3, date);   pstmt.setString(4, time);
+            pstmt.setDouble(5, fee);    pstmt.setString(6, status);
+            pstmt.setInt(7, maxCap);
+            return pstmt.executeUpdate() > 0;
+        } catch (SQLException e) {
             return false;
         }
     }
 
-    // ================ PROCESS ENROLLMENT ==============
-    /**
-     * Enrolls an athlete into a training session after validating:
-     * - Athlete exists
-     * - Session exists
-     * - Session is "Scheduled"
-     * - Session is not at full capacity
-     *
-     * Uses a transaction to safely update both tbl_Enrollments and tbl_Sessions.
-     *
-     * @param athleteId ID of the athlete to enroll.
-     * @param sessionId ID of the session to enroll into.
-     * @return A result message string indicating success or the reason for failure.
-     */
-    public String processEnrollment(int athleteId, int sessionId) {
-        String checkAthlete  = "SELECT AtheleteID FROM tbl_Information WHERE AtheleteID = ?";
-        String checkSession  = "SELECT Status, MaxCapacity, CurrentEnrollment FROM tbl_Sessions WHERE SessionID = ?";
-        String insertEnroll  = "INSERT INTO tbl_Enrollments (AtheleteID, SessionID) VALUES (?, ?)";
-        String updateSession = "UPDATE tbl_Sessions SET CurrentEnrollment = CurrentEnrollment + 1 WHERE SessionID = ?";
-
-        try (Connection conn = getConnection()) {
-
-            // --- Validate: Athlete exists ---
-            try (PreparedStatement ps = conn.prepareStatement(checkAthlete)) {
-                ps.setInt(1, athleteId);
-                if (!ps.executeQuery().next()) return ENROLL_NO_ATHLETE;
-            }
-
-            // --- Validate: Session exists and is enrollable ---
-            try (PreparedStatement ps = conn.prepareStatement(checkSession)) {
-                ps.setInt(1, sessionId);
-                ResultSet rs = ps.executeQuery();
-
-                if (!rs.next()) return ENROLL_NO_SESSION;
-
-                String status     = rs.getString("Status");
-                int    maxCap     = rs.getInt("MaxCapacity");
-                int    currentEnr = rs.getInt("CurrentEnrollment");
-
-                if (!"Scheduled".equalsIgnoreCase(status)) return ENROLL_NOT_SCHED;
-                if (currentEnr >= maxCap)                  return ENROLL_FULL;
-            }
-
-            // --- Perform enrollment (transaction) ---
-            conn.setAutoCommit(false);
-
-            try (PreparedStatement enrollStmt = conn.prepareStatement(insertEnroll);
-                 PreparedStatement updateStmt = conn.prepareStatement(updateSession)) {
-
-                enrollStmt.setInt(1, athleteId);
-                enrollStmt.setInt(2, sessionId);
-                enrollStmt.executeUpdate();
-
-                updateStmt.setInt(1, sessionId);
-                updateStmt.executeUpdate();
-
-                conn.commit();
-                return ENROLL_SUCCESS;
-
-            } catch (SQLException e) {
-                conn.rollback();
-                System.err.println("[ProcessEnrollment Error] " + e.getMessage());
-                return ENROLL_FAILED;
-            }
-
-        } catch (SQLException e) {
-            System.err.println("[DB Connection Error] " + e.getMessage());
-            return ENROLL_DB_ERROR;
-        }
-    }
-
-    // ============= DISPLAY AVAILABLE SESSIONS =========
-    /**
-     * Displays all sessions that are Scheduled and not yet full.
-     * Called before enrollment so the athlete can see their options.
-     */
-    public void displayAvailableSessions() {
-        String sql = "SELECT SessionID, SessionName, Status, MaxCapacity, CurrentEnrollment "
-                   + "FROM tbl_Sessions "
-                   + "WHERE Status = 'Scheduled' AND CurrentEnrollment < MaxCapacity";
-
-        try (Connection conn = getConnection();
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-
-            System.out.println("\n======================================= AVAILABLE SESSIONS ==========================================");
-
-            boolean hasRecords = false;
-            while (rs.next()) {
-                hasRecords = true;
-                System.out.printf("  ID: %-3d | Session: %-20s | Status: %-10s | Slots: %d/%d%n",
-                    rs.getInt("SessionID"),
-                    rs.getString("SessionName"),
-                    rs.getString("Status"),
-                    rs.getInt("CurrentEnrollment"),
-                    rs.getInt("MaxCapacity")
-                );
-            }
-
-            if (!hasRecords) System.out.println("  No available sessions at the moment.");
-            System.out.println("  =====================================================================================================");
-
-        } catch (SQLException e) {
-            System.err.println("[DisplayAvailableSessions Error] " + e.getMessage());
-        }
+    /** Backward-compatible overload (no schedule/fee). */
+    public boolean createSession(String name, String status, int maxCap) {
+        return createSession(name, "General", "TBD", "TBD", 0.0, status, maxCap);
     }
 }
-
-
